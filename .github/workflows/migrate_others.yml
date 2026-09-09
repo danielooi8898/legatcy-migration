@@ -6,7 +6,7 @@ on:
 jobs:
   migrate-others:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 350
     steps:
       - name: Migrate Cabinet other folders
         shell: pwsh
