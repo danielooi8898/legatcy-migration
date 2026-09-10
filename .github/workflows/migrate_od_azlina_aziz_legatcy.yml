@@ -1,0 +1,129 @@
+name: Legatcy OneDrive - azlina.aziz
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate-azlina_aziz_legatcy:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Migrate azlina.aziz OneDrive
+        shell: pwsh
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          $AppId    = $env:APP_ID
+          $Secret   = $env:APP_SECRET
+          $SrcUser  = "azlina_aziz_legatcy_com"
+          $DestUpn  = "azlina.aziz@accpro.co"
+          $LogFile  = "azlina_aziz_legatcy_log.csv"
+          "Path,File,Status,Error" | Set-Content $LogFile
+
+          function Get-Token($tenant) {
+              return (Invoke-RestMethod "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" -Method Post -Body @{
+                  grant_type = "client_credentials"; client_id = $AppId; client_secret = $Secret
+                  scope = "https://graph.microsoft.com/.default"
+              }).access_token
+          }
+          function Get-AuthHeader($token) { return @{ Authorization = "Bearer $token" } }
+
+          function Get-OrCreate-Folder($token, $driveId, $parentId, $folderName) {
+              if ($folderName.Length -gt 100) { $folderName = $folderName.Substring(0, 100) }
+              try {
+                  $existing = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Headers (Get-AuthHeader $token)
+                  $found = $existing.value | Where-Object { $_.name -eq $folderName -and $_.folder }
+                  if ($found) { return $found.id }
+              } catch {}
+              $body = @{ name = $folderName; folder = @{}; "@microsoft.graph.conflictBehavior" = "replace" } | ConvertTo-Json
+              $created = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Method Post -Headers (Get-AuthHeader $token) -Body $body -ContentType "application/json"
+              return $created.id
+          }
+
+          function Copy-Items($srcDriveId, $srcFolderId, $destDriveId, $destParentId, $folderPath) {
+              $items = @()
+              $url = "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcFolderId/children?`$top=200"
+              while ($url) {
+                  $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+                  $r   = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken)
+                  $items += $r.value
+                  $url = $r.'@odata.nextLink'
+              }
+
+              # Get existing dest items to skip already migrated
+              $destExisting = @()
+              try {
+                  $de = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId/children?`$top=200" -Headers (Get-AuthHeader (Get-Token "sproutasiacom.onmicrosoft.com"))
+                  $destExisting = $de.value.name
+              } catch {}
+
+              foreach ($item in $items) {
+                  if ($item.folder) {
+                      $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                      $newFolderId = Get-OrCreate-Folder $script:destToken $destDriveId $destParentId $item.name
+                      Copy-Items $srcDriveId $item.id $destDriveId $newFolderId "$folderPath/$($item.name)"
+                  } else {
+                      if ($destExisting -contains $item.name) {
+                          Write-Host "[SKIP] $folderPath/$($item.name)"
+                          continue
+                      }
+                      try {
+                          $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+                          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                          $tmpPath = [System.IO.Path]::GetTempFileName()
+                          Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$($item.id)/content" -Headers (Get-AuthHeader $script:srcToken) -OutFile $tmpPath -ErrorAction Stop
+                          $fileName = $item.name
+                          if ($fileName.Length -gt 150) {
+                              $ext  = [System.IO.Path]::GetExtension($fileName)
+                              $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                              $fileName = $base.Substring(0, 150 - $ext.Length) + $ext
+                          }
+                          $upUrl = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/content?@microsoft.graph.conflictBehavior=replace"
+                          $bytes = [System.IO.File]::ReadAllBytes($tmpPath)
+                          Invoke-RestMethod $upUrl -Method Put -Headers (Get-AuthHeader $script:destToken) -Body $bytes -ContentType "application/octet-stream" | Out-Null
+                          Remove-Item $tmpPath -ErrorAction SilentlyContinue
+                          Write-Host "[OK] $folderPath/$($item.name)"
+                          Add-Content $LogFile "$folderPath,$($item.name),OK,"
+                      } catch {
+                          Write-Host "[ERR] $folderPath/$($item.name)"
+                          Add-Content $LogFile "$folderPath,$($item.name),ERROR,$_"
+                          Remove-Item $tmpPath -ErrorAction SilentlyContinue
+                      }
+                  }
+              }
+          }
+
+          $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+
+          # Get source OneDrive
+          $srcSite   = Invoke-RestMethod "https://graph.microsoft.com/v1.0/sites/legatcy-my.sharepoint.com:/personal/$SrcUser" -Headers (Get-AuthHeader $script:srcToken)
+          $srcDrives = Invoke-RestMethod "https://graph.microsoft.com/v1.0/sites/$($srcSite.id)/drives" -Headers (Get-AuthHeader $script:srcToken)
+          $srcDrive  = $srcDrives.value | Where-Object { $_.name -eq "OneDrive" }
+
+          if (-not $srcDrive) {
+              Write-Host "[SKIP] No OneDrive found for $SrcUser"
+              exit 0
+          }
+
+          # Get destination
+          $enc           = [Uri]::EscapeDataString($DestUpn)
+          $destUserDrive = Invoke-RestMethod "https://graph.microsoft.com/v1.0/users/$enc/drive" -Headers (Get-AuthHeader $script:destToken)
+          $destDriveId   = $destUserDrive.id
+          $legatcyFolder = Get-OrCreate-Folder $script:destToken $destDriveId "root" "Legatcy Onedrive"
+
+          $srcRoot = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$($srcDrive.id)/root" -Headers (Get-AuthHeader $script:srcToken)
+
+          Write-Host "Starting migration for $DestUpn"
+          Copy-Items $srcDrive.id $srcRoot.id $destDriveId $legatcyFolder $DestUpn
+
+          Write-Host "===== DONE: $DestUpn ====="
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azlina_aziz_legatcy-log
+          path: azlina_aziz_legatcy_log.csv
