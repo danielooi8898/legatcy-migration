@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      - name: Migrate companies batch 5 (index 800 to 999)
+      - name: Migrate companies batch 5 (index 380 to 474)
         shell: pwsh
         env:
           APP_ID: ${{ secrets.APP_ID }}
@@ -19,8 +19,8 @@ jobs:
           $Secret      = $env:APP_SECRET
           $SrcDriveId  = "b!5ogB-g_vn0mOUWJtaPmZyk0rNIay469KkTS4lSORytaKitpcHMq_SrowGpvDyaQ1"
           $DestDriveId = "b!97JCsSNnaEy518vVPcfw0vboi8V4fc9Fhc6NdnhzY2bzImedhf4yT4A9Dho0XnEn"
-          $BatchStart  = 800
-          $BatchEnd    = 999
+          $BatchStart  = 380
+          $BatchEnd    = 474
           $LogFile     = "batch_5_log.csv"
           "Company,Folder,File,Status,Error" | Set-Content $LogFile
 
@@ -44,20 +44,17 @@ jobs:
               return $created.id
           }
 
-          function Upload-File($srcDriveId, $srcItemId, $destDriveId, $destParentId, $fileName, $fileSize) {
+          function Upload-File($srcDriveId, $srcItemId, $destDriveId, $destParentId, $fileName) {
               $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
               $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
-
               $item  = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcItemId" -Headers (Get-AuthHeader $script:srcToken)
               $dlUrl = $item."@microsoft.graph.downloadUrl"
               if (-not $dlUrl) { $dlUrl = "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcItemId/content" }
-
               $tmpPath = [System.IO.Path]::GetTempFileName()
               $wc = New-Object System.Net.WebClient
               $wc.Headers.Add("Authorization", "Bearer $($script:srcToken)")
               $wc.DownloadFile($dlUrl, $tmpPath)
               $actualSize = (Get-Item $tmpPath).Length
-
               if ($actualSize -le 4mb) {
                   $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
                   $upUrl = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/content?@microsoft.graph.conflictBehavior=replace"
@@ -105,14 +102,12 @@ jobs:
                   $items += $r.value
                   $url = $r.'@odata.nextLink'
               }
-
               $destExisting = @()
               try {
                   $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
                   $de = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId/children?`$top=200" -Headers (Get-AuthHeader $script:destToken)
                   $destExisting = $de.value.name
               } catch {}
-
               foreach ($item in $items) {
                   if ($item.folder) {
                       $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
@@ -130,7 +125,7 @@ jobs:
                               $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
                               $fileName = $base.Substring(0, 150 - $ext.Length) + $ext
                           }
-                          Upload-File $srcDriveId $item.id $destDriveId $destParentId $fileName $item.size
+                          Upload-File $srcDriveId $item.id $destDriveId $destParentId $fileName
                           Write-Host "[OK] $($item.name)"
                           Add-Content $LogFile "$company,$folderPath,$($item.name),OK,"
                       } catch {
@@ -158,7 +153,7 @@ jobs:
           Write-Host "Total companies: $($allCompanies.Count)"
 
           $batchCompanies = $allCompanies[($BatchStart)..([Math]::Min($BatchEnd, $allCompanies.Count - 1))]
-          Write-Host "Batch 5: $($batchCompanies.Count) companies"
+          Write-Host "Batch 5: $($batchCompanies.Count) companies (index $BatchStart to $BatchEnd)"
 
           $destExisting = @()
           $url = "https://graph.microsoft.com/v1.0/drives/$DestDriveId/items/$companiesFolder/children?`$top=200"
