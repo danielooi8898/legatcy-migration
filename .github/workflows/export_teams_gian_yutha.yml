@@ -17,7 +17,7 @@ jobs:
         run: |
           $AppId     = $env:APP_ID
           $Secret    = $env:APP_SECRET
-          $UserEmail = "gian.yutha@legatcy.com"
+          $UserEmail = "yutha.gian@legatcy.com"
           $DestUpn   = "gian.yutha@accpro.co"
 
           function Get-Token($tenant) {
