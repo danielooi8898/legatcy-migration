@@ -1,0 +1,137 @@
+name: Legatcy Teams Chat Export - gian.yutha
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export-chats-gian_yutha:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Export Teams chats for gian.yutha
+        shell: pwsh
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          $AppId     = $env:APP_ID
+          $Secret    = $env:APP_SECRET
+          $UserEmail = "gian.yutha@legatcy.com"
+          $DestUpn   = "gian.yutha@accpro.co"
+
+          function Get-Token($tenant) {
+              return (Invoke-RestMethod "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" -Method Post -Body @{
+                  grant_type = "client_credentials"; client_id = $AppId; client_secret = $Secret
+                  scope = "https://graph.microsoft.com/.default"
+              }).access_token
+          }
+          function Get-AuthHeader($token) { return @{ Authorization = "Bearer $token" } }
+
+          function Get-OrCreate-Folder($token, $driveId, $parentId, $folderName) {
+              if ($folderName.Length -gt 80) { $folderName = $folderName.Substring(0, 80) }
+              $folderName = $folderName -replace '[\\/:*?"<>|]', '_'
+              try {
+                  $existing = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Headers (Get-AuthHeader $token)
+                  $found = $existing.value | Where-Object { $_.name -eq $folderName -and $_.folder }
+                  if ($found) { return $found.id }
+              } catch {}
+              $body = @{ name = $folderName; folder = @{}; "@microsoft.graph.conflictBehavior" = "replace" } | ConvertTo-Json
+              $created = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Method Post -Headers (Get-AuthHeader $token) -Body $body -ContentType "application/json"
+              return $created.id
+          }
+
+          function Build-Html($chatName, $chatType, $memberList, $messages) {
+              $sb = New-Object System.Text.StringBuilder
+              [void]$sb.AppendLine("<!DOCTYPE html><html><head><meta charset=UTF-8><title>$chatName</title>")
+              [void]$sb.AppendLine("<style>body{font-family:Segoe UI,Arial,sans-serif;max-width:900px;margin:20px auto;background:#f5f5f5}")
+              [void]$sb.AppendLine(".header{background:#6264A7;color:white;padding:20px;border-radius:8px;margin-bottom:20px}")
+              [void]$sb.AppendLine(".message{background:white;border-radius:8px;padding:12px 16px;margin:8px 0;box-shadow:0 1px 3px rgba(0,0,0,.1)}")
+              [void]$sb.AppendLine(".sender{font-weight:bold;color:#6264A7}.time{font-size:.8em;color:#888;margin-left:10px}")
+              [void]$sb.AppendLine(".content{margin-top:6px;white-space:pre-wrap}</style></head><body>")
+              [void]$sb.AppendLine("<div class=header><h2>$chatName</h2>")
+              [void]$sb.AppendLine("<p>Type: $chatType | Messages: $($messages.Count) | Exported: $(Get-Date -Format 'yyyy-MM-dd HH:mm')</p>")
+              [void]$sb.AppendLine("<p>Members: $memberList</p></div>")
+              $sorted = $messages | Sort-Object createdDateTime
+              foreach ($msg in $sorted) {
+                  if ($msg.messageType -ne "message") { continue }
+                  $sender = if ($msg.from.user.displayName) { $msg.from.user.displayName } else { "Unknown" }
+                  $time   = if ($msg.createdDateTime) { [DateTime]::Parse($msg.createdDateTime).ToLocalTime().ToString("yyyy-MM-dd HH:mm") } else { "" }
+                  $body   = if ($msg.body.content) { $msg.body.content -replace "<[^>]+>","" -replace "&nbsp;"," " -replace "&amp;","&" -replace "&lt;","<" -replace "&gt;",">" } else { "" }
+                  [void]$sb.AppendLine("<div class=message><span class=sender>$sender</span><span class=time>$time</span><div class=content>$body</div></div>")
+              }
+              [void]$sb.AppendLine("</body></html>")
+              return $sb.ToString()
+          }
+
+          $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+
+          $enc           = [Uri]::EscapeDataString($DestUpn)
+          $destUserDrive = Invoke-RestMethod "https://graph.microsoft.com/v1.0/users/$enc/drive" -Headers (Get-AuthHeader $script:destToken)
+          $destDriveId   = $destUserDrive.id
+          $legatcyFolder = Get-OrCreate-Folder $script:destToken $destDriveId "root" "Legatcy Onedrive"
+          $chatHistFolder = Get-OrCreate-Folder $script:destToken $destDriveId $legatcyFolder "Teams Chat History"
+
+          $srcEnc   = [Uri]::EscapeDataString($UserEmail)
+          $allChats = @()
+          $url = "https://graph.microsoft.com/v1.0/users/$srcEnc/chats?`$expand=members&`$top=50"
+          while ($url) {
+              $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+              $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken)
+              $allChats += $r.value
+              $url = $r."@odata.nextLink"
+          }
+          Write-Host "Found $($allChats.Count) chats for $UserEmail"
+
+          foreach ($chat in $allChats) {
+              $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+              $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+
+              $chatName = if ($chat.topic) { $chat.topic } else { "$($chat.chatType)_$($chat.id.Substring(0,8))" }
+              $chatName = $chatName -replace '[\\/:*?"<>|]', '_'
+              if ($chatName.Length -gt 80) { $chatName = $chatName.Substring(0, 80) }
+
+              Write-Host "Exporting: $chatName"
+              try {
+                  $messages  = @()
+                  $url       = "https://graph.microsoft.com/v1.0/users/$srcEnc/chats/$($chat.id)/messages?`$top=50"
+                  $pageCount = 0
+                  while ($url -and $pageCount -lt 200) {
+                      $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+                      $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken)
+                      $messages += $r.value
+                      $url = $r."@odata.nextLink"
+                      $pageCount++
+                  }
+                  if ($messages.Count -eq 0) { Write-Host "  Empty, skipping"; continue }
+                  Write-Host "  $($messages.Count) messages"
+
+                  $memberList = ($chat.members | ForEach-Object { $_.displayName }) -join ", "
+                  $html       = Build-Html $chatName $chat.chatType $memberList $messages
+                  $fileName   = "$chatName.html"
+                  $tmpPath    = [System.IO.Path]::GetTempFileName() + ".html"
+                  [System.IO.File]::WriteAllText($tmpPath, $html, [System.Text.Encoding]::UTF8)
+
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $fileSize = (Get-Item $tmpPath).Length
+                  $fs       = [System.IO.File]::OpenRead($tmpPath)
+                  $upUrl    = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$chatHistFolder`:/$fileName`:/content?@microsoft.graph.conflictBehavior=replace"
+                  $webReq   = [System.Net.WebRequest]::Create($upUrl)
+                  $webReq.Method = "PUT"
+                  $webReq.Headers.Add("Authorization", "Bearer $($script:destToken)")
+                  $webReq.ContentType   = "text/html"
+                  $webReq.ContentLength = $fileSize
+                  $reqStream = $webReq.GetRequestStream()
+                  $fs.CopyTo($reqStream)
+                  $reqStream.Close()
+                  $fs.Close()
+                  $resp = $webReq.GetResponse()
+                  $resp.Close()
+                  Remove-Item $tmpPath -ErrorAction SilentlyContinue
+                  Write-Host "  [OK] $fileName"
+              } catch {
+                  Write-Host "  [ERR] $chatName -- $_"
+              }
+          }
+          Write-Host "===== DONE: gian.yutha ====="
