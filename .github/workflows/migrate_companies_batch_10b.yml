@@ -1,0 +1,191 @@
+name: Legatcy Cabinet Companies - Batch 10b
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate-batch-10b:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Migrate companies batch 10b (index 925 to 949)
+        shell: pwsh
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          $AppId       = $env:APP_ID
+          $Secret      = $env:APP_SECRET
+          $SrcDriveId  = "b!5ogB-g_vn0mOUWJtaPmZyk0rNIay469KkTS4lSORytaKitpcHMq_SrowGpvDyaQ1"
+          $DestDriveId = "b!97JCsSNnaEy518vVPcfw0vboi8V4fc9Fhc6NdnhzY2bzImedhf4yT4A9Dho0XnEn"
+          $BatchStart  = 925
+          $BatchEnd    = 949
+          $LogFile     = "batch_10b_log.csv"
+          "Company,Folder,File,Status,Error" | Set-Content $LogFile
+
+          function Get-Token($tenant) {
+              return (Invoke-RestMethod "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" -Method Post -Body @{
+                  grant_type = "client_credentials"; client_id = $AppId; client_secret = $Secret
+                  scope = "https://graph.microsoft.com/.default"
+              }).access_token
+          }
+          function Get-AuthHeader($token) { return @{ Authorization = "Bearer $token" } }
+
+          function Get-OrCreate-Folder($token, $driveId, $parentId, $folderName) {
+              if ($folderName.Length -gt 100) { $folderName = $folderName.Substring(0, 100) }
+              try {
+                  $existing = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Headers (Get-AuthHeader $token)
+                  $found = $existing.value | Where-Object { $_.name -eq $folderName -and $_.folder }
+                  if ($found) { return $found.id }
+              } catch {}
+              $body = @{ name = $folderName; folder = @{}; "@microsoft.graph.conflictBehavior" = "replace" } | ConvertTo-Json
+              $created = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Method Post -Headers (Get-AuthHeader $token) -Body $body -ContentType "application/json"
+              return $created.id
+          }
+
+          function Upload-File($srcDriveId, $srcItemId, $destDriveId, $destParentId, $fileName) {
+              $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+              $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+              $item  = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcItemId" -Headers (Get-AuthHeader $script:srcToken)
+              $dlUrl = $item."@microsoft.graph.downloadUrl"
+              if (-not $dlUrl) { $dlUrl = "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcItemId/content" }
+              $tmpPath = [System.IO.Path]::GetTempFileName()
+              $wc = New-Object System.Net.WebClient
+              $wc.Headers.Add("Authorization", "Bearer $($script:srcToken)")
+              $wc.DownloadFile($dlUrl, $tmpPath)
+              $actualSize = (Get-Item $tmpPath).Length
+              if ($actualSize -le 4mb) {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $upUrl = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/content?@microsoft.graph.conflictBehavior=replace"
+                  $fs = [System.IO.File]::OpenRead($tmpPath)
+                  $webReq = [System.Net.WebRequest]::Create($upUrl)
+                  $webReq.Method = "PUT"
+                  $webReq.Headers.Add("Authorization", "Bearer $($script:destToken)")
+                  $webReq.ContentType = "application/octet-stream"
+                  $webReq.ContentLength = $actualSize
+                  $reqStream = $webReq.GetRequestStream()
+                  $fs.CopyTo($reqStream)
+                  $reqStream.Close()
+                  $fs.Close()
+                  $resp = $webReq.GetResponse()
+                  $resp.Close()
+              } else {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $sessionBody = @{ item = @{ "@microsoft.graph.conflictBehavior" = "replace"; name = $fileName } } | ConvertTo-Json
+                  $sessionUrl  = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/createUploadSession"
+                  $session     = Invoke-RestMethod $sessionUrl -Method Post -Headers (Get-AuthHeader $script:destToken) -Body $sessionBody -ContentType "application/json"
+                  $uploadUrl   = $session.uploadUrl
+                  $fs          = [System.IO.File]::OpenRead($tmpPath)
+                  $chunkSize   = 5mb
+                  $buf         = New-Object byte[] $chunkSize
+                  $offset      = 0
+                  while ($offset -lt $actualSize) {
+                      $read  = $fs.Read($buf, 0, $chunkSize)
+                      $chunk = $buf[0..($read-1)]
+                      $end   = $offset + $read - 1
+                      $hdrs  = @{ "Content-Range" = "bytes $offset-$end/$actualSize"; "Content-Length" = "$read" }
+                      Invoke-RestMethod $uploadUrl -Method Put -Headers $hdrs -Body $chunk | Out-Null
+                      $offset += $read
+                  }
+                  $fs.Close()
+              }
+              Remove-Item $tmpPath -ErrorAction SilentlyContinue
+          }
+
+          function Copy-Items($srcDriveId, $srcFolderId, $destDriveId, $destParentId, $company, $folderPath) {
+              $items = @()
+              $url = "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcFolderId/children?`$top=200"
+              while ($url) {
+                  $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+                  $r   = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken)
+                  $items += $r.value
+                  $url = $r."@odata.nextLink"
+              }
+              $destExisting = @()
+              try {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $de = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId/children?`$top=200" -Headers (Get-AuthHeader $script:destToken)
+                  $destExisting = $de.value.name
+              } catch {}
+              foreach ($item in $items) {
+                  if ($item.folder) {
+                      $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                      $newFolderId = Get-OrCreate-Folder $script:destToken $destDriveId $destParentId $item.name
+                      Copy-Items $srcDriveId $item.id $destDriveId $newFolderId $company "$folderPath/$($item.name)"
+                  } else {
+                      if ($destExisting -contains $item.name) { Write-Host "[SKIP] $($item.name)"; continue }
+                      try {
+                          $fileName = $item.name
+                          if ($fileName.Length -gt 150) {
+                              $ext  = [System.IO.Path]::GetExtension($fileName)
+                              $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                              $fileName = $base.Substring(0, 150 - $ext.Length) + $ext
+                          }
+                          Upload-File $srcDriveId $item.id $destDriveId $destParentId $fileName
+                          Write-Host "[OK] $($item.name)"
+                          Add-Content $LogFile "$company,$folderPath,$($item.name),OK,"
+                      } catch {
+                          Write-Host "[ERR] $($item.name) -- $_"
+                          Add-Content $LogFile "$company,$folderPath,$($item.name),ERROR,$_"
+                      }
+                  }
+              }
+          }
+
+          $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+
+          $cabinetFolder   = Get-OrCreate-Folder $script:destToken $DestDriveId "root" "Cabinet"
+          $companiesFolder = Get-OrCreate-Folder $script:destToken $DestDriveId $cabinetFolder "Companies"
+
+          $allCompanies = @()
+          $url = "https://graph.microsoft.com/v1.0/drives/$SrcDriveId/root:/Companies:/children?`$top=200"
+          while ($url) {
+              $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+              $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken)
+              $allCompanies += $r.value
+              $url = $r."@odata.nextLink"
+          }
+          Write-Host "Total: $($allCompanies.Count)"
+
+          $batchCompanies = $allCompanies[($BatchStart)..([Math]::Min($BatchEnd, $allCompanies.Count - 1))]
+          Write-Host "Batch 10b: $($batchCompanies.Count) companies"
+
+          $destExisting = @()
+          $url = "https://graph.microsoft.com/v1.0/drives/$DestDriveId/items/$companiesFolder/children?`$top=200"
+          while ($url) {
+              $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+              $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:destToken)
+              $destExisting += $r.value.name
+              $url = $r."@odata.nextLink"
+          }
+          Write-Host "Already migrated: $($destExisting.Count)"
+
+          $counter = 0
+          foreach ($company in $batchCompanies) {
+              $counter++
+              if ($destExisting -contains $company.name) {
+                  Write-Host "[$counter/$($batchCompanies.Count)] SKIP: $($company.name)"
+                  continue
+              }
+              Write-Host "[$counter/$($batchCompanies.Count)] COMPANY: $($company.name)"
+              try {
+                  $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $destFolder = Get-OrCreate-Folder $script:destToken $DestDriveId $companiesFolder $company.name
+                  Copy-Items $SrcDriveId $company.id $DestDriveId $destFolder $company.name $company.name
+                  Write-Host "[$counter/$($batchCompanies.Count)] DONE: $($company.name)"
+              } catch {
+                  Write-Host "[$counter/$($batchCompanies.Count)] FAIL: $($company.name)"
+                  Add-Content $LogFile "$($company.name),,,FAIL,$_"
+              }
+          }
+          Write-Host "===== BATCH 10b COMPLETE ====="
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-10b-log
+          path: batch_10b_log.csv
