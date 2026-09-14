@@ -151,7 +151,7 @@ jobs:
             @{ Name = "Jinchaoyang Innovation Technology Pte. Ltd. - Online"; SrcId = "01PG666Z43Y3GU2X2CVBG2YROHZMFAAMM5"; DestId = "01D7FHFBFDEFYAEFHMONGKAZ42C6NTEPBN" },
             @{ Name = "K3 Group Holdings Pte.Ltd - Online"; SrcId = "01PG666ZZK4EC6RV3BLZBZCOQOPSZTA4DL"; DestId = "01D7FHFBAANULE5D2Q2ZAZGMJBBYSPZRUV" },
             @{ Name = "Kai M&E Pte. Ltd. - Online"; SrcId = "01PG666ZYJBF2TZMPA4BBKJUKKJUKSRH35"; DestId = "01D7FHFBG4N5SRBPJVAJG3NHVFPRF3VOBM" },
-            @{ Name = "Kai Millwork Pte. Ltd. - Online"; SrcId = "01PG666Z6TFZGTDOQYE5CKUPJTKBRAIIMB"; DestId = "01D7FHFBFRDLX7KW5SY5BZMDGV7YMHNCW2" },
+            @{ Name = "Kai Millwork Pte. Ltd. - Online"; SrcId = "01PG666Z6TFZGTDOQYE5CKUPJTKBRAIIMB"; DestId = "01D7FHFBFRDLX7KW5SY5BZMDGV7YMHNCW2" }
           )
 
           $counter = 0
