@@ -151,7 +151,7 @@ jobs:
             @{ Name = "Splore Pte. Ltd. - Online"; SrcId = "01PG666Z5YBLUGLZLXSZCZUOPZP7OXPEOZ"; DestId = "01D7FHFBHJMBHTPGEA7BBZN6JAAEOUAQYN" },
             @{ Name = "Staple AI Pte. Ltd. - Online"; SrcId = "01PG666Z7KMH2MRMQVWBCZVEBVFOGFPP3T"; DestId = "01D7FHFBDL6FZYEUG6BFBJG7M5R54EEGPL" },
             @{ Name = "Stash PH Pte. Ltd"; SrcId = "01PG666ZZQ3TL2JEWKAZCK3NN6XJMU3XYP"; DestId = "01D7FHFBCI3CW6V3MKIFF2DFCGRMYRSHIG" },
-            @{ Name = "Sttoke Incorporated Pte. Ltd._Offline"; SrcId = "01PG666Z6AUHZBC2YM5NGJEQ35MOECMUEC"; DestId = "01D7FHFBDEK7UCFLETMFHLKKSI5SWGBLZQ" },
+            @{ Name = "Sttoke Incorporated Pte. Ltd._Offline"; SrcId = "01PG666Z6AUHZBC2YM5NGJEQ35MOECMUEC"; DestId = "01D7FHFBDEK7UCFLETMFHLKKSI5SWGBLZQ" }
           )
 
           $counter = 0
