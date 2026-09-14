@@ -151,7 +151,7 @@ jobs:
             @{ Name = "Biocurrent Pte.Ltd. fka_Studio VSH Pte. Ltd._Offline"; SrcId = "01PG666Z3VDJP6AQDZBJDLCIGEKG4RLAT4"; DestId = "01D7FHFBFYHFJBAPXZVNCZS2ERFSPL25XQ" },
             @{ Name = "Blue Ginger Partners Inc_Offline"; SrcId = "01PG666Z4CJZGA3CKFABDJ3IDMB55RIQ67"; DestId = "01D7FHFBDVIE6V7SJCFFE2VTBTTTCEOBWZ" },
             @{ Name = "Brocita Enterprise Pte. Ltd. - Online"; SrcId = "01PG666Z455O74ZGPAZJAK3KRWAOQ7HF3P"; DestId = "01D7FHFBGEW5MCWZVEVJD36AM56EBGKY7N" },
-            @{ Name = "BSW Marine Pte. Ltd. - Online"; SrcId = "01PG666Z6VX7KD3QNA75HZNNAWEHO7IWAC"; DestId = "01D7FHFBB32X75EIKIBJCYZFJQZXB3HXIK" },
+            @{ Name = "BSW Marine Pte. Ltd. - Online"; SrcId = "01PG666Z6VX7KD3QNA75HZNNAWEHO7IWAC"; DestId = "01D7FHFBB32X75EIKIBJCYZFJQZXB3HXIK" }
           )
 
           $counter = 0
