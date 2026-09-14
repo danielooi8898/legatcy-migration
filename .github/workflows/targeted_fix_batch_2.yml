@@ -151,7 +151,7 @@ jobs:
             @{ Name = "Equalizer Assets Limited_Offline"; SrcId = "01PG666Z4PGOPWWO5SYFHLSYFTUWHK5CK4"; DestId = "01D7FHFBCA4A6HCRKOKRFZMKPLM4UWNBOA" },
             @{ Name = "Equalizer Ops Limited_Offline"; SrcId = "01PG666ZZ6T3RZMR6XKJCYIDLFKF37KO5H"; DestId = "01D7FHFBGFS36MYMPLWZD2BOVFE4NNDGPX" },
             @{ Name = "FathomX Pte. Ltd._Offline"; SrcId = "01PG666Z3HDV26P7VHEBCKBIJNEPDOIMJ7"; DestId = "01D7FHFBFFRY7SN6UJBBCIFAQZHS2CISKK" },
-            @{ Name = "Fecometal Singapore Pte.Ltd. - Online"; SrcId = "01PG666Z5LVWMPWV2BO5CLYERBGXPLTQ5Q"; DestId = "01D7FHFBDDJK7STNYFP5DINVCVWFKDSUAO" },
+            @{ Name = "Fecometal Singapore Pte.Ltd. - Online"; SrcId = "01PG666Z5LVWMPWV2BO5CLYERBGXPLTQ5Q"; DestId = "01D7FHFBDDJK7STNYFP5DINVCVWFKDSUAO" }
           )
 
           $counter = 0
