@@ -1,0 +1,171 @@
+name: Legatcy Cabinet Targeted Fix - Batch 6
+
+on:
+  workflow_dispatch:
+
+jobs:
+  targeted-fix-6:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Targeted fix batch 6
+        shell: pwsh
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          $AppId       = $env:APP_ID
+          $Secret      = $env:APP_SECRET
+          $SrcDriveId  = "b!5ogB-g_vn0mOUWJtaPmZyk0rNIay469KkTS4lSORytaKitpcHMq_SrowGpvDyaQ1"
+          $DestDriveId = "b!97JCsSNnaEy518vVPcfw0vboi8V4fc9Fhc6NdnhzY2bzImedhf4yT4A9Dho0XnEn"
+          $LogFile     = "targeted_fix_6_log.csv"
+          "Company,Path,Item,Action,Error" | Set-Content $LogFile
+
+          function Get-Token($tenant) {
+              return (Invoke-RestMethod "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" -Method Post -Body @{
+                  grant_type = "client_credentials"; client_id = $AppId; client_secret = $Secret
+                  scope = "https://graph.microsoft.com/.default"
+              }).access_token
+          }
+          function Get-AuthHeader($token) { return @{ Authorization = "Bearer $token" } }
+
+          function Get-OrCreate-Folder($token, $driveId, $parentId, $folderName) {
+              if ($folderName.Length -gt 100) { $folderName = $folderName.Substring(0, 100) }
+              try {
+                  $existing = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children?`$top=200" -Headers (Get-AuthHeader $token)
+                  $found = $existing.value | Where-Object { $_.name -eq $folderName -and $_.folder }
+                  if ($found) { return $found.id }
+              } catch {}
+              $body = @{ name = $folderName; folder = @{}; "@microsoft.graph.conflictBehavior" = "replace" } | ConvertTo-Json
+              $created = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$driveId/items/$parentId/children" -Method Post -Headers (Get-AuthHeader $token) -Body $body -ContentType "application/json"
+              return $created.id
+          }
+
+          function Upload-File($srcDriveId, $srcItemId, $destDriveId, $destParentId, $fileName) {
+              $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+              $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+              $item  = Invoke-RestMethod "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcItemId" -Headers (Get-AuthHeader $script:srcToken)
+              $dlUrl = $item."@microsoft.graph.downloadUrl"
+              $tmpPath = [System.IO.Path]::GetTempFileName()
+              $wc = New-Object System.Net.WebClient
+              $wc.Headers.Add("Authorization", "Bearer $($script:srcToken)")
+              $wc.DownloadFile($dlUrl, $tmpPath)
+              $actualSize = (Get-Item $tmpPath).Length
+              if ($actualSize -le 4mb) {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $upUrl = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/content?@microsoft.graph.conflictBehavior=replace"
+                  $fs = [System.IO.File]::OpenRead($tmpPath)
+                  $webReq = [System.Net.WebRequest]::Create($upUrl)
+                  $webReq.Method = "PUT"; $webReq.Headers.Add("Authorization", "Bearer $($script:destToken)")
+                  $webReq.ContentType = "application/octet-stream"; $webReq.ContentLength = $actualSize
+                  $reqStream = $webReq.GetRequestStream(); $fs.CopyTo($reqStream); $reqStream.Close(); $fs.Close()
+                  $resp = $webReq.GetResponse(); $resp.Close()
+              } else {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $sessionBody = @{ item = @{ "@microsoft.graph.conflictBehavior" = "replace"; name = $fileName } } | ConvertTo-Json
+                  $sessionUrl  = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId`:/$fileName`:/createUploadSession"
+                  $session     = Invoke-RestMethod $sessionUrl -Method Post -Headers (Get-AuthHeader $script:destToken) -Body $sessionBody -ContentType "application/json"
+                  $uploadUrl   = $session.uploadUrl
+                  $fs = [System.IO.File]::OpenRead($tmpPath); $chunkSize = 5mb; $buf = New-Object byte[] $chunkSize; $offset = 0
+                  while ($offset -lt $actualSize) {
+                      $read = $fs.Read($buf, 0, $chunkSize); $chunk = $buf[0..($read-1)]; $end = $offset + $read - 1
+                      $hdrs = @{ "Content-Range" = "bytes $offset-$end/$actualSize"; "Content-Length" = "$read" }
+                      Invoke-RestMethod $uploadUrl -Method Put -Headers $hdrs -Body $chunk | Out-Null; $offset += $read
+                  }
+                  $fs.Close()
+              }
+              Remove-Item $tmpPath -ErrorAction SilentlyContinue
+          }
+
+          function Sync-Folder($srcDriveId, $srcFolderId, $destDriveId, $destParentId, $company, $folderPath) {
+              $srcItems = @(); $url = "https://graph.microsoft.com/v1.0/drives/$srcDriveId/items/$srcFolderId/children?`$top=200"
+              while ($url) {
+                  $script:srcToken = Get-Token "legatcy.onmicrosoft.com"
+                  $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:srcToken); $srcItems += $r.value; $url = $r."@odata.nextLink"
+              }
+              $destItems = @()
+              try {
+                  $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                  $url = "https://graph.microsoft.com/v1.0/drives/$destDriveId/items/$destParentId/children?`$top=200"
+                  while ($url) { $r = Invoke-RestMethod $url -Headers (Get-AuthHeader $script:destToken); $destItems += $r.value; $url = $r."@odata.nextLink" }
+              } catch {}
+              $destNames = $destItems.name
+              foreach ($item in $srcItems) {
+                  if ($item.folder) {
+                      $existing = $destItems | Where-Object { $_.name -eq $item.name -and $_.folder }
+                      if ($existing) { $destFolderId = $existing.id }
+                      else {
+                          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+                          $destFolderId = Get-OrCreate-Folder $script:destToken $destDriveId $destParentId $item.name
+                          Write-Host "[FOLDER CREATED] $folderPath/$($item.name)" -ForegroundColor Yellow
+                          Add-Content $LogFile "$company,$folderPath,$($item.name),FOLDER_CREATED,"
+                      }
+                      Sync-Folder $srcDriveId $item.id $destDriveId $destFolderId $company "$folderPath/$($item.name)"
+                  } else {
+                      if ($destNames -contains $item.name) { Write-Host "[SKIP] $($item.name)" }
+                      else {
+                          try {
+                              $fileName = $item.name
+                              if ($fileName.Length -gt 150) {
+                                  $ext = [System.IO.Path]::GetExtension($fileName); $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                                  $fileName = $base.Substring(0, 150 - $ext.Length) + $ext
+                              }
+                              Upload-File $srcDriveId $item.id $destDriveId $destParentId $fileName
+                              Write-Host "[OK] $folderPath/$($item.name)" -ForegroundColor Green
+                              Add-Content $LogFile "$company,$folderPath,$($item.name),UPLOADED,"
+                          } catch {
+                              Write-Host "[ERR] $folderPath/$($item.name) -- $_" -ForegroundColor Red
+                              Add-Content $LogFile "$company,$folderPath,$($item.name),ERROR,$_"
+                          }
+                      }
+                  }
+              }
+          }
+
+          $script:srcToken  = Get-Token "legatcy.onmicrosoft.com"
+          $script:destToken = Get-Token "sproutasiacom.onmicrosoft.com"
+
+          $companies = @(
+            @{ Name = "Suptheapp Pte. Ltd._Offline"; SrcId = "01PG666ZZXS2JBFUAMTFBLE44Q7WCRDGQR"; DestId = "01D7FHFBHKMNSKGOGYOJH2FXYERTOQKSMF" },
+            @{ Name = "Sushi Labs Pte Ltd - (Company Name)_Online OR Offline"; SrcId = "01PG666Z27AOFAIXCUBVAIRM5T5KKDNMAH"; DestId = "01D7FHFBELFXA5KDRW3JEIV5NE5T4AO65Y" },
+            @{ Name = "TengFei Shengye Innovation Technology Pte. Ltd.  - Online"; SrcId = "01PG666Z6LUNOLOQUE5NEYLBQUIZH6YEPH"; DestId = "01D7FHFBHMKRUIGYWKWFDZ3ZQ7SX62NCDI" },
+            @{ Name = "The Posture Lab Pte. Ltd"; SrcId = "01PG666Z5RAVSEK7KH65B3URHPCESIPMLE"; DestId = "01D7FHFBED4UG55PDQPNDLKTELKS3TXII3" },
+            @{ Name = "Timah Partners Management Pte.Ltd.  - Online"; SrcId = "01PG666Z3DK36ZSVP7RBC3P64PZQQRLHOE"; DestId = "01D7FHFBCH4FZ7HP4JA5HLGHFGLLLYMYAY" },
+            @{ Name = "Tomny Wholesale Services Pte. Ltd"; SrcId = "01PG666ZZ6CLOIOSLGWBCYMK3VSWAOOIG3"; DestId = "01D7FHFBBSTRHFUPQKDRAJUTSFZQBHOD3N" },
+            @{ Name = "Tour Amigo Pte. Ltd. - Online"; SrcId = "01PG666Z35OWB3HXRQ3JBIJX7EZQVMD6IC"; DestId = "01D7FHFBCNQGU66SLRS5GYL64IE2DPTHBH" },
+            @{ Name = "UCARS Pte.Ltd. - Online OR Offline"; SrcId = "01PG666Z6UGE4JCDINKZCJLYBYWT5XREH7"; DestId = "01D7FHFBH2YQ4MJD3ZKFFIRGJGB2T5CNPO" },
+            @{ Name = "Vessel Capital Holdings Limited"; SrcId = "01PG666Z2KD4XGXW7RKZAYTILUOBYJILWX"; DestId = "01D7FHFBES72FT7IBVLVF27FTZA6YCUWNN" },
+            @{ Name = "Via Monte Tech Pte.Ltd._Online"; SrcId = "01PG666Z65A6WYTOK2OZAKX77AZ2U4T6Q6"; DestId = "01D7FHFBFCG3AOU22XHVAYNOA3YCZFCVI7" },
+            @{ Name = "VitalCheck Wellness Pte.Ltd. _Online"; SrcId = "01PG666Z7CR3TO7MQ3QZH2L6SVNEQUZVNU"; DestId = "01D7FHFBG5G3JUNGHRQVEZLKM7TRVW3ATS" },
+            @{ Name = "VNDC Holding Pte. Ltd._Offline"; SrcId = "01PG666Z5MNZQJVPIXBVF3V2AMVB3MXKOD"; DestId = "01D7FHFBC2P5ZADQWMWJGY6U5IDLABX25F" },
+            @{ Name = "WaveBoost Pte. Ltd. - Online OR Offline"; SrcId = "01PG666Z4AFO5ERZL42RHYC46VV23RPFF6"; DestId = "01D7FHFBFR7A43XHLGCZHZS6GB2OF2APM4" },
+            @{ Name = "Wastex Pte.Ltd. - Online"; SrcId = "01PG666ZYAHM2REBFOUFEYLENIX77K6NRZ"; DestId = "01D7FHFBEHWNB2I4AXBBHKDMVLXMRVEHY4" },
+            @{ Name = "Wellspring Global Pte. Ltd. - Online"; SrcId = "01PG666Z5B3UK4FKJRPFEIFZOEOWJLQFK3"; DestId = "01D7FHFBET7HBB7YUODZDJ7WPWZC4E3IPI" },
+            @{ Name = "Worldkart Pte. Ltd._Online"; SrcId = "01PG666ZZX5BQNF6ZLC5ALMHUJKRDBKBZP"; DestId = "01D7FHFBBAX4DOQPXEJ5AJCHECZZV3RQ27" },
+            @{ Name = "Wow Live Group Pte.Ltd. -Offline_online"; SrcId = "01PG666Z7GD3DPM5NMCZHZQENFM4S4OSW4"; DestId = "01D7FHFBDMBAJAN52X5ZG2NX5K56YQNEUA" },
+            @{ Name = "Yanjing Zhongnan Construction Pte. Ltd._Offline"; SrcId = "01PG666Z6ANLCJAWD4UNFJ7B7QZUH6HWSI"; DestId = "01D7FHFBDSYTPFQO5YTZCKKVFGRUR3Q5VR" },
+            @{ Name = "Yong Xing Materials Singapore Pte.Ltd._Online OR Offline"; SrcId = "01PG666Z4VLVATQ3XO2VELPJEQXACZXCQC"; DestId = "01D7FHFBAZEWMMSU5K2FD3WGPRGVQH6ES6" },
+            @{ Name = "Yongtaiheng Trading Pte.Ltd. - Online"; SrcId = "01PG666ZZ3CM7JXEZXTRBZCVQDYLN3TS23"; DestId = "01D7FHFBAVU3WCJ3KYCZH35JDWBBEVF4YV" },
+          )
+
+          $counter = 0
+          foreach ($company in $companies) {
+              $counter++
+              Write-Host "[$counter/$($companies.Count)] $($company.Name)" -ForegroundColor Cyan
+              try {
+                  Sync-Folder $SrcDriveId $company.SrcId $DestDriveId $company.DestId $company.Name $company.Name
+                  Write-Host "  DONE" -ForegroundColor Green
+              } catch {
+                  Write-Host "  FAIL: $_" -ForegroundColor Red
+                  Add-Content $LogFile "$($company.Name),,,FAIL,$_"
+              }
+          }
+          Write-Host "===== BATCH 6 COMPLETE =====" -ForegroundColor Magenta
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: targeted-fix-6-log
+          path: targeted_fix_6_log.csv
